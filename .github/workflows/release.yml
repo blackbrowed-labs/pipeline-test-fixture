@@ -1,0 +1,79 @@
+# .github/workflows/release.yml
+# Triggers on tag push (vX.Y.Z); extracts CHANGELOG.md section as release body;
+# dispatches product-release-published to blackbrowed-labs/blackbrowedlabs.com.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  # Forward-defense for GitHub's Node 20 deprecation (default flip 2026-06-02,
+  # removal 2026-09-16). Per blackbrowedlabs.com's PRODUCT_REPO_CONVENTIONS.md.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  release:
+    name: Create GitHub Release + dispatch website rebuild
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Extract CHANGELOG section for this version
+        id: changelog
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          # Match `## [vX.Y.Z]` or `## [X.Y.Z]` heading; capture until next `## [` heading.
+          BODY=$(awk -v tag="${TAG#v}" '
+            /^## \[/ { if (seen) exit; if ($0 ~ "\\["tag"\\]" || $0 ~ "\\[v"tag"\\]") seen=1; next }
+            seen { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' | awk 'BEGIN{empty=0} /./{empty=0; print; next} {empty++; if (empty<2) print}')
+          if [ -z "$BODY" ]; then
+            echo "::error::No CHANGELOG section found for tag $TAG. Add a '## [$TAG]' or '## [${TAG#v}]' section to CHANGELOG.md before tagging."
+            exit 1
+          fi
+          # Multi-line output via heredoc-delimiter pattern for GH Actions.
+          {
+            echo "body<<EOF"
+            echo "$BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Idempotent: skip if release already exists for this tag.
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists; skipping create."
+          else
+            cat <<'BODY_EOF' > /tmp/release_body.md
+          ${{ steps.changelog.outputs.body }}
+          BODY_EOF
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file /tmp/release_body.md
+          fi
+
+      - name: Dispatch website rebuild
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::WEBSITE_DISPATCH_TOKEN secret is not set on this repo. Ask Lars (or the org admin) to add it. See PRODUCT_REPO_CONVENTIONS.md §5."
+            exit 1
+          fi
+          gh api repos/blackbrowed-labs/blackbrowedlabs.com/dispatches \
+            -f event_type=product-release-published \
+            -f client_payload[productSlug]="${{ github.event.repository.name }}" \
+            -f client_payload[tagName]="${GITHUB_REF_NAME}"
