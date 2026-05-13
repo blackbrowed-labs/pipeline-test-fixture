@@ -6,6 +6,16 @@ All notable changes to this fixture documented per
 This fixture's purpose is to verify the website's release pipeline; the
 "changes" are deliberately synthetic.
 
+## [0.0.3] — 2026-05-13
+
+### Added
+
+- Second bare-numeral integration-test release. Verifies the new
+  `rebuild-on-dispatch-staging.yml` workflow on
+  blackbrowed-labs/blackbrowedlabs.com — a single dispatch should now
+  refresh both production and staging in parallel without needing a
+  manual `workflow_dispatch` on `deploy-staging.yml`.
+
 ## [0.0.2] — 2026-05-13
 
 ### Added
